@@ -45,11 +45,6 @@ Loads up the YAML configuration file and validates dynamodb connection details. 
 
 * `namespace`, determines the table name prefix. Each repository using this library should have a unique namespace.
 * `aws_access_key_id` and `aws_secret_access_key`, the AWS connection credentials for boto's connection. Examples shown in [the tutorial](http://boto.readthedocs.org/en/latest/dynamodb2_tut.html)
-* `table_config`, a path to the YAML file for table configuration.
-
-### dynamodb.yml
-
-This file contains the table schema for each table (required), and optional secondary indexes (`global_indexes`  or indexes (local secondary indexes).
 
 ## Usage
 
@@ -108,10 +103,8 @@ Example:
 
 In your configuration file, e.g. `config.py`:
 
-    DYNAMODB_CONFIG_PATH = os.path.join(os.path.dirname(__file__), 'dynamodb.yml')
     DATABASE = dict(
         namespace='test_',
-        table_config=DYNAMODB_CONFIG_PATH,
         aws_access_key_id='test',
         aws_secret_access_key='secret',
     )
@@ -119,11 +112,8 @@ In your configuration file, e.g. `config.py`:
 If you want to use [DynamoDB Local](http://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Tools.DynamoDBLocal.html), just pass `host` as a parameter in the connection, e.g.:
 
     DATABASE = dict(
-        namespace='test_',
         host='localhost',
-        table_config=DYNAMODB_CONFIG_PATH,
-        aws_access_key_id='test',
-        aws_secret_access_key='secret',
+        ...
     )
 
 This uses AWS's provided jar file to run DynamoDB locally. Read more [here](http://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Tools.DynamoDBLocal.html).
