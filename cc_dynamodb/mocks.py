@@ -1,7 +1,7 @@
 from decimal import Decimal
 import operator
 
-from boto.dynamodb2 import table
+from boto.dynamodb2 import table as dynamodb2_table
 from boto.dynamodb2.types import QUERY_OPERATORS
 from mock import patch
 import moto.core.models
@@ -12,7 +12,19 @@ import cc_dynamodb
 __all__ = [
     'mock_query_2',
     'mock_table_with_data',
+    'create_table',
 ]
+
+
+def create_table(table_name):
+    """Create table. Throws an error if table already exists."""
+    config = cc_dynamodb.get_config()
+    args, kwargs = cc_dynamodb._dynamodb_translator.create_table_args(table_name, config.namespace)
+    table = cc_dynamodb.get_connection().create_table(*args, **kwargs)
+    # moto sometimes return a dict
+    if isinstance(table, dict):
+        table = dynamodb2_table.Table(table['Table']['TableName'])
+    return table
 
 
 def mock_table_with_data(table_name, data):
@@ -25,7 +37,7 @@ def mock_table_with_data(table_name, data):
 
     len(table.scan())  # Expect 2 results
     '''
-    table = cc_dynamodb.create_table(table_name)
+    table = create_table(table_name)
 
     for item_data in data:
         table.put_item(item_data)
@@ -33,7 +45,7 @@ def mock_table_with_data(table_name, data):
     return table
 
 
-class TableWithQuery2(table.Table):
+class TableWithQuery2(dynamodb2_table.Table):
     @staticmethod
     def _sorting_function(range_keys):
         def sorter(obj):
@@ -54,11 +66,11 @@ class TableWithQuery2(table.Table):
     def _query_2_with_index(self, *args, **kwargs):
         table_name = cc_dynamodb.get_reverse_table_name(self.table_name)
         index = cc_dynamodb.get_table_index(table_name, kwargs.pop('index'))
-        valid_keys = [key['name'] for key in index['parts'] if key['type'] == 'HashKey']
+        valid_keys = [key.schema()['AttributeName'] for key in index.parts if key.schema()['KeyType'] == 'HASH']
         if len(valid_keys) != 1:
             raise ValueError('Need exactly 1 HashKey for table: %s, index: %s' % (table_name, index))
 
-        range_keys = [key['name'] for key in index['parts'] if key['type'] == 'RangeKey']
+        range_keys = [key.schema()['AttributeName'] for key in index.parts if key.schema()['KeyType'] == 'RANGE']
         valid_keys += range_keys
 
         # reverse is also not supported by moto

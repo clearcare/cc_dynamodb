@@ -1,39 +1,35 @@
 import copy
 import os
-import time
 
 from boto import dynamodb2
-from boto.dynamodb2 import fields  # AllIndex, GlobalAllIndex, HashKey, RangeKey
 from boto.dynamodb2 import table
-from boto.dynamodb2 import types
-from boto.exception import JSONResponseError
 from bunch import Bunch
-import yaml
+from hcl_translator import dynamodb2_translator
 
+
+from .exceptions import ConfigurationError
 from .log import create_logger
 
 
 logger = create_logger()
 UPDATE_INDEX_RETRIES = 60
 
-# Cache to avoid parsing YAML file repeatedly.
+# Cache to avoid parsing config file repeatedly.
 _cached_config = None
+_dynamodb_translator = None
 
 
-def set_config(table_config, namespace=None, aws_access_key_id=False, aws_secret_access_key=False,
+def set_config(dynamodb_tf, namespace=None, aws_access_key_id=False, aws_secret_access_key=False,
                host=None, port=None, is_secure=None):
     global _cached_config
+    global _dynamodb_translator
 
-    with open(table_config) as config_file:
-        yaml_config = yaml.load(config_file)
+    _dynamodb_translator = dynamodb2_translator(dynamodb_tf, logger)
 
     _cached_config = Bunch({
-        'yaml': yaml_config,
         'namespace': namespace or os.environ.get('CC_DYNAMODB_NAMESPACE'),
-        'aws_access_key_id': aws_access_key_id if aws_access_key_id is not False else
-                             os.environ.get('CC_DYNAMODB_ACCESS_KEY_ID', False),
-        'aws_secret_access_key': aws_secret_access_key if aws_secret_access_key is not False else
-                                 os.environ.get('CC_DYNAMODB_SECRET_ACCESS_KEY', False),
+        'aws_access_key_id': aws_access_key_id or os.environ.get('CC_DYNAMODB_ACCESS_KEY_ID', False),
+        'aws_secret_access_key': aws_secret_access_key or os.environ.get('CC_DYNAMODB_SECRET_ACCESS_KEY', False),
         'host': host or os.environ.get('CC_DYNAMODB_HOST'),
         'port': port or os.environ.get('CC_DYNAMODB_PORT'),
         'is_secure': is_secure or os.environ.get('CC_DYNAMODB_IS_SECURE'),
@@ -63,73 +59,11 @@ def set_config(table_config, namespace=None, aws_access_key_id=False, aws_secret
     logger.info('cc_dynamodb.set_config', extra=dict(status='config loaded'))
 
 
-def get_config(**kwargs):
+def get_config():
     global _cached_config
-
     if not _cached_config:
-        set_config(**kwargs)
-
+        raise ConfigurationError('set_config must be called before get_config')
     return Bunch(copy.deepcopy(_cached_config.toDict()))
-
-
-class ConfigurationError(Exception):
-    pass
-
-
-def _build_key(key_details):
-    key_details = key_details.copy()
-    key_type = getattr(fields, key_details.pop('type'))
-    key_details['data_type'] = getattr(types, key_details['data_type'])
-    return key_type(**key_details)
-
-
-def _build_keys(keys_config):
-    return [_build_key(key_details)
-            for key_details in keys_config]
-
-
-def _build_secondary_index(index_details, is_global):
-    index_details = index_details.copy()
-    index_type = getattr(fields, index_details.pop('type'))
-
-    kwargs = dict(
-        parts=[]
-    )
-    for key_details in index_details.get('parts', []):
-        kwargs['parts'].append(_build_key(key_details))
-
-    if is_global:
-        kwargs['throughput'] = index_details.pop('throughput', None)
-
-    return index_type(index_details['name'], **kwargs)
-
-
-def _build_secondary_indexes(indexes_config, is_global):
-    return [_build_secondary_index(index_details, is_global=is_global)
-            for index_details in indexes_config]
-
-
-def _get_table_metadata(table_name):
-    config = get_config().yaml
-
-    try:
-        keys_config = config['schemas'][table_name]
-    except KeyError:
-        logger.exception('cc_dynamodb.UnknownTable', extra=dict(table_name=table_name,
-                                                                config=config,
-                                                                DTM_EVENT='cc_dynamodb.UnknownTable'))
-        raise UnknownTableException('Unknown table: %s' % table_name)
-
-    schema = _build_keys(keys_config)
-
-    global_indexes_config = config.get('global_indexes', {}).get(table_name, [])
-    indexes_config = config.get('indexes', {}).get(table_name, [])
-
-    return dict(
-        schema=schema,
-        global_indexes=_build_secondary_indexes(global_indexes_config, is_global=True),
-        indexes=_build_secondary_indexes(indexes_config, is_global=False),
-    )
 
 
 def get_table_name(table_name):
@@ -144,15 +78,9 @@ def get_reverse_table_name(table_name):
 
 
 def get_table_index(table_name, index_name):
-    """Given a table name and an index name, return the index."""
-    config = get_config()
-    all_indexes = (config.yaml.get('indexes', {}).items() +
-                   config.yaml.get('global_indexes', {}).items())
-    for config_table_name, table_indexes in all_indexes:
-        if config_table_name == table_name:
-            for index in table_indexes:
-                if index['name'] == index_name:
-                    return index
+    if _dynamodb_translator is None:
+        raise ConfigurationError('set_config must be called')
+    return _dynamodb_translator.get_table_index(table_name, index_name)
 
 
 def get_connection():
@@ -175,18 +103,11 @@ def get_connection():
     )
 
 
-def get_table_columns(table_name):
-    """Return known columns for a table and their data type."""
-    # TODO: see if table.describe() can return what dynamodb knows instead.
-    config = get_config().yaml
-    try:
-        return dict(
-            (column_name, getattr(types, column_type))
-                for column_name, column_type in config['columns'][table_name].items())
-    except KeyError:
-        logger.exception('UnknownTable: %s' % table_name, extra=dict(config=config,
-                                                                     DTM_EVENT='cc_dynamodb.UnknownTable'))
-        raise UnknownTableException('Unknown table: %s' % table_name)
+def list_table_names():
+    """List known table names from configuration, without namespace."""
+    if _dynamodb_translator is None:
+        raise ConfigurationError('set_config must be called')
+    return _dynamodb_translator.list_table_names()
 
 
 def get_table(table_name, connection=None):
@@ -198,154 +119,15 @@ def get_table(table_name, connection=None):
     This function avoids additional lookups when using a table.
     The columns included are only the optional columns you may find in some of the items.
     '''
+    if _dynamodb_translator is None:
+        raise ConfigurationError('set_config must be called')
     return table.Table(
         get_table_name(table_name),
         connection=connection or get_connection(),
-        **_get_table_metadata(table_name)
+        **_dynamodb_translator.table_kwargs(table_name)
     )
 
 
-def list_table_names():
-    """List known table names from configuration, without namespace."""
-    return get_config().yaml['schemas'].keys()
-
-
-def _get_or_default_throughput(throughput):
-    if throughput is False:
-        config = get_config()
-        throughput = config.yaml['default_throughput']
-    return throughput
-
-
-def _get_table_init_data(table_name, connection, throughput):
-    init_data = dict(
-        table_name=get_table_name(table_name),
-        connection=connection or get_connection(),
-        throughput=_get_or_default_throughput(throughput),
-    )
-    init_data.update(_get_table_metadata(table_name))
-    return init_data
-
-
-def create_table(table_name, connection=None, throughput=False):
-    """Create table. Throws an error if table already exists."""
-    try:
-        db_table = table.Table.create(**_get_table_init_data(table_name, connection=connection, throughput=throughput))
-        logger.info('cc_dynamodb.create_table: %s' % table_name, extra=dict(status='created table'))
-        return db_table
-    except JSONResponseError as e:
-        if e.status == 400 and e.error_code == 'ResourceInUseException':
-            logger.warn('Called create_table("%s"), but already exists: %s' %
-                        (table_name, e.body))
-            raise TableAlreadyExistsException(body=e.body)
-        raise e
-
-
-def _validate_schema(schema, table_metadata):
-    """Raise error if primary index (schema) is not the same as upstream"""
-    upstream_schema = table_metadata['Table']['KeySchema']
-    upstream_schema_attributes = [i['AttributeName'] for i in upstream_schema]
-    upstream_attributes = [item for item in table_metadata['Table']['AttributeDefinitions']
-                           if item['AttributeName'] in upstream_schema_attributes]
-
-    local_schema = [item.schema() for item in schema]
-    local_schema_attributes = [i['AttributeName'] for i in local_schema]
-    local_attributes = [item.definition() for item in schema
-                        if item.definition()['AttributeName'] in local_schema_attributes]
-
-    if sorted(upstream_schema, key=lambda i: i['AttributeName']) != sorted(local_schema, key=lambda i: i['AttributeName']):
-        msg = 'Mismatched schema: %s VS %s' % (upstream_schema, local_schema)
-        logger.warn(msg)
-        raise UpdateTableException(msg)
-
-    if sorted(upstream_attributes, key=lambda i: i['AttributeName']) != sorted(local_attributes, key=lambda i: i['AttributeName']):
-        msg = 'Mismatched attributes: %s VS %s' % (upstream_attributes, local_attributes)
-        logger.warn(msg)
-        raise UpdateTableException(msg)
-
-
-def update_table(table_name, connection=None, throughput=False):
-    """
-    Update existing table.
-
-    Handles updating primary index and global secondary indexes.
-    Updates throughput and creates/deletes indexes.
-
-    :param table_name: unprefixed table name
-    :param connection: optional dynamodb connection, to avoid creating one
-    :param throughput: a dict, e.g. {'read': 10, 'write': 10}
-    :return: the updated boto Table
-    """
-    db_table = table.Table(**_get_table_init_data(table_name, connection=connection, throughput=throughput))
-    local_global_indexes_by_name = dict((index.name, index) for index in db_table.global_indexes)
-    try:
-        table_metadata = db_table.describe()
-    except JSONResponseError as e:
-        if e.status == 400 and e.error_code == 'ResourceNotFoundException':
-            raise UnknownTableException('Unknown table: %s' % table_name)
-
-    _validate_schema(schema=db_table.schema, table_metadata=table_metadata)
-
-    # Update existing primary index throughput
-    db_table.update(throughput=throughput)
-
-    upstream_global_indexes_by_name = dict((index['IndexName'], index)
-                                           for index in table_metadata['Table'].get('GlobalSecondaryIndexes', []))
-    for index_name, index in local_global_indexes_by_name.items():
-        if index_name not in upstream_global_indexes_by_name:
-            logger.info('Creating GSI %s for %s' % (index_name, table_name))
-            for i in range(UPDATE_INDEX_RETRIES + 1):
-                try:
-                    db_table.create_global_secondary_index(index)
-                except JSONResponseError as e:
-                    if 'already exists' in str(e.body):
-                        break
-
-                    if i < UPDATE_INDEX_RETRIES:
-                        time.sleep(1)
-                    else:
-                        raise
-        else:
-            throughput = {
-                'write': upstream_global_indexes_by_name[index_name]['ProvisionedThroughput']['WriteCapacityUnits'],
-                'read': upstream_global_indexes_by_name[index_name]['ProvisionedThroughput']['ReadCapacityUnits'],
-            }
-            if throughput == index.throughput:
-                continue
-            # Update throughput
-            # TODO: this could be done in a single call with multiple indexes
-            db_table.update_global_secondary_index(global_indexes={
-                index_name: index.throughput
-            })
-            logger.info('Updating GSI %s throughput for %s to %s' % (index_name, table_name, index.throughput))
-
-    for index_name in upstream_global_indexes_by_name.keys():
-        if index_name not in local_global_indexes_by_name:
-            logger.info('Deleting GSI %s for %s' % (index_name, table_name))
-            for i in range(UPDATE_INDEX_RETRIES + 1):
-                try:
-                    db_table.delete_global_secondary_index(index_name)
-                except JSONResponseError as e:
-                    if 'ResourceNotFoundException' in str(e.body):
-                        break
-
-                    if i < UPDATE_INDEX_RETRIES:
-                        time.sleep(1)
-                    else:
-                        raise
-
-    logger.info('cc_dynamodb.update_table: %s' % table_name, extra=dict(status='updated table'))
-    return db_table
-
-
-class UnknownTableException(Exception):
-    pass
-
-
-class TableAlreadyExistsException(Exception):
-    def __init__(self, body):
-        self.body = body
-
-
-class UpdateTableException(Exception):
-    pass
+def list_tables(connection=None):
+    dynamodb = connection or get_connection()
+    return dynamodb.list_tables()
