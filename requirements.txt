@@ -1,4 +1,5 @@
 bunch>=1.0.1
 boto>=2.31.1
-PyYAML>=3.10
 -e git+https://github.com/spulec/moto.git@0.4.1#egg=moto
+-e git+https://github.com/virtuald/pyhcl.git@0830b300774f94b930255bded91c08cb03c1df8e#egg=pyhcl
+-e git+git@github.com:clearcare/cc_hcl_translator.git@0.2.1#egg=hcl_translator
