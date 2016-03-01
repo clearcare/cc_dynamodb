@@ -19,6 +19,7 @@ UPDATE_INDEX_RETRIES = 60
 # Cache to avoid parsing YAML file repeatedly.
 _cached_config = None
 
+
 def set_config(table_config, namespace=None, aws_access_key_id=False, aws_secret_access_key=False,
                host=None, port=None, is_secure=None):
     global _cached_config
@@ -28,17 +29,15 @@ def set_config(table_config, namespace=None, aws_access_key_id=False, aws_secret
 
     _cached_config = Bunch({
         'yaml': yaml_config,
-        'namespace': namespace
-                        or os.environ.get('CC_DYNAMODB_NAMESPACE'),
-        'aws_access_key_id': aws_access_key_id if aws_access_key_id != False
-                                else os.environ.get('CC_DYNAMODB_ACCESS_KEY_ID', False),
-        'aws_secret_access_key': aws_secret_access_key if aws_secret_access_key != False
-                                    else os.environ.get('CC_DYNAMODB_SECRET_ACCESS_KEY', False),
+        'namespace': namespace or os.environ.get('CC_DYNAMODB_NAMESPACE'),
+        'aws_access_key_id': aws_access_key_id if aws_access_key_id is not False else
+                             os.environ.get('CC_DYNAMODB_ACCESS_KEY_ID', False),
+        'aws_secret_access_key': aws_secret_access_key if aws_secret_access_key is not False else
+                                 os.environ.get('CC_DYNAMODB_SECRET_ACCESS_KEY', False),
         'host': host or os.environ.get('CC_DYNAMODB_HOST'),
         'port': port or os.environ.get('CC_DYNAMODB_PORT'),
         'is_secure': is_secure or os.environ.get('CC_DYNAMODB_IS_SECURE'),
     })
-
 
     if not _cached_config.namespace:
         msg = 'Missing namespace kwarg OR environment variable CC_DYNAMODB_NAMESPACE'
@@ -212,8 +211,8 @@ def list_table_names():
 
 
 def _get_or_default_throughput(throughput):
-    if throughput == False:
-    	config = get_config()
+    if throughput is False:
+        config = get_config()
         throughput = config.yaml['default_throughput']
     return throughput
 

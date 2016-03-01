@@ -1,7 +1,4 @@
-from decimal import Decimal
-
 from moto import mock_dynamodb2
-import pytest
 
 from cc_dynamodb.mocks import mock_table_with_data, mock_query_2
 
@@ -52,6 +49,7 @@ def _test_comparator_helper(**query_kwargs):
         results = list(table.query_2(saved_in_rdb__eq=0, index='SavedInRDB', **query_kwargs))
 
     return [result.get('time') for result in results]
+
 
 @mock_dynamodb2
 def test_mock_query_2_filters_equal(fake_config):
