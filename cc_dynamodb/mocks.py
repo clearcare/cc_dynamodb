@@ -14,6 +14,7 @@ __all__ = [
     'mock_table_with_data',
 ]
 
+
 def mock_table_with_data(table_name, data):
     '''Create a table and populate it with array of items from data.
 
@@ -123,6 +124,7 @@ class MockQuery2(moto.core.models.MockAWS):
 
     def stop(self):
         self.patcher.stop()
+
 
 def mock_query_2(func=None):
     """Use this when testing query_2 with secondary index.

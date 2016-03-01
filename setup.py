@@ -1,7 +1,7 @@
 from setuptools import setup, find_packages
 
 setup(
-    name = 'cc_dynamodb',
+    name='cc_dynamodb',
     packages=find_packages(),
     install_requires=[
         'bunch>=1.0.1',
@@ -9,8 +9,8 @@ setup(
         'PyYAML==3.10',
     ],
     tests_require=['pytest', 'mock', 'factory_boy'],
-    version = '0.5.3',
-    description = 'A dynamodb common configuration abstraction',
+    version='0.5.3',
+    description='A dynamodb common configuration abstraction',
     author='Paul Craciunoiu',
     author_email='pcraciunoiu@clearcareonline.com',
     url='https://github.com/clearcare/cc_dynamodb',
