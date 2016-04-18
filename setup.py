@@ -3,10 +3,12 @@ from setuptools import setup, find_packages
 setup(
     name='cc_dynamodb',
     packages=find_packages(),
+    dependency_links=['git+https://github.com/virtuald/pyhcl.git@0830b300774f94b930255bded91c08cb03c1df8e#egg=pyhcl'],
     install_requires=[
         'bunch>=1.0.1',
         'boto>=2.31.1',
         'PyYAML==3.10',
+        'pyhcl',
     ],
     tests_require=['pytest', 'mock', 'factory_boy'],
     version='0.5.3',
