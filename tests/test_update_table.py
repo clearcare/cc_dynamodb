@@ -94,13 +94,29 @@ def test_update_table_should_create_update_delete_gsi(fake_config):
     original_config = cc_dynamodb.get_config()
     patcher = mock.patch('cc_dynamodb.get_config')
     mock_config = patcher.start()
-    original_config.yaml['global_indexes']['change_in_condition'].append({
-        'parts': [
-            {'type': 'HashKey', 'name': 'rdb_id', 'data_type': 'NUMBER'},
-            {'type': 'RangeKey', 'name': 'session_id', 'data_type': 'NUMBER'}],
-        'type': 'GlobalAllIndex',
-        'name': 'RdbID',
-    })
+
+    original_config.hcl['resource']['aws_dynamodb_table']['change_in_condition']['global_secondary_index'] = [
+        {
+            'hash_key': 'rdb_id',
+            'range_key': 'session_id',
+            'projection_type': 'ALL',
+            'name': 'RdbID',
+            'read': 15,
+            'write': 15,
+        },
+        {
+            'hash_key': 'saved_in_rdb',
+            'range_key': 'time',
+            'projection_type': 'ALL',
+            'name': 'SavedInRDB',
+        },
+    ]
+
+    original_config.hcl['resource']['aws_dynamodb_table']['change_in_condition']['attribute'].extend([
+        {'name': 'rdb_id', 'type': 'N'},
+        {'name': 'session_id', 'type': 'N'},
+    ])
+
     mock_config.return_value = original_config
 
     patcher = mock.patch('cc_dynamodb.table.Table.describe')
@@ -124,7 +140,7 @@ def test_update_table_should_create_update_delete_gsi(fake_config):
     mock_delete_gsi.stop()
     mock_config.stop()
 
-    mock_update_gsi.assert_called_with(global_indexes={'SavedInRDB': {'read': 15, 'write': 15}})
+    mock_update_gsi.assert_called_with(global_indexes={'SavedInRDB': {'read': 5, 'write': 5}})
     assert mock_create_gsi.called
     assert mock_create_gsi.call_args[0][0].name == 'RdbID'
     mock_delete_gsi.assert_called_with('SomeUpstreamIndex')
@@ -159,7 +175,9 @@ def test_update_table_should_update_gsi_if_no_throughput_defined(fake_config):
     original_config = cc_dynamodb.get_config()
     patcher = mock.patch('cc_dynamodb.get_config')
     mock_config = patcher.start()
-    del original_config.yaml['global_indexes']['change_in_condition'][0]['throughput']
+    del original_config.hcl['resource']['aws_dynamodb_table']['change_in_condition']['global_secondary_index'][0]['read']
+    del original_config.hcl['resource']['aws_dynamodb_table']['change_in_condition']['global_secondary_index'][0]['write']
+
     mock_config.return_value = original_config
 
     patcher = mock.patch('cc_dynamodb.table.Table.describe')

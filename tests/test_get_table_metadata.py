@@ -1,6 +1,23 @@
+from __future__ import unicode_literals
+
 from moto import mock_dynamodb
 
 import cc_dynamodb
+
+
+@mock_dynamodb
+def test_get_table_metadata_schema(fake_config):
+
+    metadata = cc_dynamodb._get_table_metadata('change_in_condition')
+    assert metadata['schema'][0].definition() == {
+        'AttributeName': 'carelog_id',
+        'AttributeType': 'N',
+    }
+
+    assert metadata['schema'][0].schema() == {
+        'KeyType': 'HASH',
+        'AttributeName': 'carelog_id',
+    }
 
 
 @mock_dynamodb
@@ -11,7 +28,8 @@ def test_get_table_metadata_indexes(fake_config):
         {
             'AttributeName': 'carelog_id',
             'AttributeType': 'N',
-        }, {
+        },
+        {
             'AttributeName': 'session_id',
             'AttributeType': 'N',
         }
@@ -44,7 +62,8 @@ def test_get_table_metadata_global_indexes(fake_config):
         {
             'AttributeName': 'saved_in_rdb',
             'AttributeType': 'N'
-        }, {
+        },
+        {
             'AttributeName': 'time',
             'AttributeType': 'N',
         }
@@ -69,20 +88,4 @@ def test_get_table_metadata_global_indexes(fake_config):
             'WriteCapacityUnits': 15,
             'ReadCapacityUnits': 15,
         }
-    }
-
-
-@mock_dynamodb
-def test_get_table_metadata_schema(fake_config):
-
-    metadata = cc_dynamodb._get_table_metadata('change_in_condition')
-
-    assert metadata['schema'][0].definition() == {
-        'AttributeName': 'carelog_id',
-        'AttributeType': 'N',
-    }
-
-    assert metadata['schema'][0].schema() == {
-        'KeyType': 'HASH',
-        'AttributeName': 'carelog_id',
     }

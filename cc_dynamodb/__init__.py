@@ -1,14 +1,13 @@
 import copy
 import os
 import time
+import hcl
 
 from boto import dynamodb2
 from boto.dynamodb2 import fields  # AllIndex, GlobalAllIndex, HashKey, RangeKey
 from boto.dynamodb2 import table
-from boto.dynamodb2 import types
 from boto.exception import JSONResponseError
 from bunch import Bunch
-import yaml
 
 from .log import create_logger
 
@@ -20,20 +19,18 @@ UPDATE_INDEX_RETRIES = 60
 _cached_config = None
 
 
-def set_config(table_config, namespace=None, aws_access_key_id=False, aws_secret_access_key=False,
+def set_config(terraform_hcl, namespace=None, aws_access_key_id=False, aws_secret_access_key=False,
                host=None, port=None, is_secure=None):
     global _cached_config
 
-    with open(table_config) as config_file:
-        yaml_config = yaml.load(config_file)
+    with open(terraform_hcl) as hcl_file:
+        terraform_config = hcl.load(hcl_file)
 
     _cached_config = Bunch({
-        'yaml': yaml_config,
+        'hcl': terraform_config,
         'namespace': namespace or os.environ.get('CC_DYNAMODB_NAMESPACE'),
-        'aws_access_key_id': aws_access_key_id if aws_access_key_id is not False else
-                             os.environ.get('CC_DYNAMODB_ACCESS_KEY_ID', False),
-        'aws_secret_access_key': aws_secret_access_key if aws_secret_access_key is not False else
-                                 os.environ.get('CC_DYNAMODB_SECRET_ACCESS_KEY', False),
+        'aws_access_key_id': aws_access_key_id or os.environ.get('CC_DYNAMODB_ACCESS_KEY_ID'),
+        'aws_secret_access_key': aws_secret_access_key or os.environ.get('CC_DYNAMODB_SECRET_ACCESS_KEY'),
         'host': host or os.environ.get('CC_DYNAMODB_HOST'),
         'port': port or os.environ.get('CC_DYNAMODB_PORT'),
         'is_secure': is_secure or os.environ.get('CC_DYNAMODB_IS_SECURE'),
@@ -76,60 +73,101 @@ class ConfigurationError(Exception):
     pass
 
 
-def _build_key(key_details):
-    key_details = key_details.copy()
-    key_type = getattr(fields, key_details.pop('type'))
-    key_details['data_type'] = getattr(types, key_details['data_type'])
-    return key_type(**key_details)
+def translate_projection_key(projection_key, is_global=False):
+    return '{}{}Index'.format('Global' if is_global else '', projection_key.title())
 
 
-def _build_keys(keys_config):
-    return [_build_key(key_details)
-            for key_details in keys_config]
+def translate_field_type(field_type):
+    return ''.join(c.title() for c in field_type.split('_'))
 
 
-def _build_secondary_index(index_details, is_global):
-    index_details = index_details.copy()
-    index_type = getattr(fields, index_details.pop('type'))
+def translate_attributes(attributes):
+    return {attribute['name']: attribute['type'] for attribute in attributes}
 
-    kwargs = dict(
-        parts=[]
-    )
-    for key_details in index_details.get('parts', []):
-        kwargs['parts'].append(_build_key(key_details))
 
-    if is_global:
-        kwargs['throughput'] = index_details.pop('throughput', None)
+def _build_attribute(field_name, field_type, attributes):
+    key_type = getattr(fields, translate_field_type(field_type))
+    return key_type(field_name, **{'data_type': attributes[field_name]})
+
+
+def _build_schema(key_config, attributes):
+    hash_key = key_config['hash_key']
+    schema = [
+        _build_attribute(hash_key, 'hash_key', attributes)
+    ]
+
+    range_key = key_config.get('range_key')
+    if range_key:
+        schema.append(_build_attribute(range_key, 'range_key', attributes))
+    return schema
+
+
+def _build_index_kwargs(index_details, attributes):
+    hash_key = index_details['hash_key']
+
+    kwargs = {
+        'parts': [
+            _build_attribute(hash_key, 'hash_key', attributes),
+        ],
+    }
+
+    range_key = index_details.get('range_key')
+    if range_key:
+        kwargs['parts'].append(_build_attribute(range_key, 'range_key', attributes))
+
+    return kwargs
+
+
+def _build_secondary_index(index_details, attributes):
+    index_type = getattr(fields, translate_projection_key(index_details['projection_type']))
+    kwargs = _build_index_kwargs(index_details, attributes)
+    return index_type(index_details['name'], **kwargs)
+
+
+def _build_global_index(index_details, attributes):
+    index_type = getattr(fields, translate_projection_key(index_details['projection_type'], is_global=True))
+
+    kwargs = _build_index_kwargs(index_details, attributes)
+    kwargs['throughput'] = {
+        'read': int(index_details.get('read_capacity', 5)),
+        'write': int(index_details.get('write_capacity', 5)),
+    }
 
     return index_type(index_details['name'], **kwargs)
 
 
-def _build_secondary_indexes(indexes_config, is_global):
-    return [_build_secondary_index(index_details, is_global=is_global)
-            for index_details in indexes_config]
-
-
 def _get_table_metadata(table_name):
-    config = get_config().yaml
 
     try:
-        keys_config = config['schemas'][table_name]
+        table = get_config().hcl['resource']['aws_dynamodb_table'][table_name]
     except KeyError:
-        logger.exception('cc_dynamodb.UnknownTable', extra=dict(table_name=table_name,
-                                                                config=config,
-                                                                DTM_EVENT='cc_dynamodb.UnknownTable'))
+        logger.exception('cc_dynamodb.UnknownTable', extra=dict(
+            table_name=table_name,
+            table=table_name,
+            DTM_EVENT='cc_dynamodb.UnknownTable'),
+        )
         raise UnknownTableException('Unknown table: %s' % table_name)
 
-    schema = _build_keys(keys_config)
+    attributes = translate_attributes(table['attribute'])
 
-    global_indexes_config = config.get('global_indexes', {}).get(table_name, [])
-    indexes_config = config.get('indexes', {}).get(table_name, [])
+    metadata = {
+        'schema': _build_schema(table, attributes),
+    }
 
-    return dict(
-        schema=schema,
-        global_indexes=_build_secondary_indexes(global_indexes_config, is_global=True),
-        indexes=_build_secondary_indexes(indexes_config, is_global=False),
-    )
+    global_secondary_index = table.get('global_secondary_index')
+    if global_secondary_index is not None:
+        if isinstance(global_secondary_index, list):
+            metadata['global_indexes'] = [
+                _build_global_index(i, attributes) for i in global_secondary_index
+            ]
+        else:
+            metadata['global_indexes'] = _build_global_index(global_secondary_index, attributes),
+
+    local_secondary_index = table.get('local_secondary_index')
+    if local_secondary_index is not None:
+        metadata['indexes'] = _build_secondary_index(local_secondary_index, attributes),
+
+    return metadata
 
 
 def get_table_name(table_name):
@@ -144,15 +182,19 @@ def get_reverse_table_name(table_name):
 
 
 def get_table_index(table_name, index_name):
-    """Given a table name and an index name, return the index."""
-    config = get_config()
-    all_indexes = (config.yaml.get('indexes', {}).items() +
-                   config.yaml.get('global_indexes', {}).items())
-    for config_table_name, table_indexes in all_indexes:
-        if config_table_name == table_name:
-            for index in table_indexes:
-                if index['name'] == index_name:
-                    return index
+
+    for table_name, table_data in get_config().hcl['resource']['aws_dynamodb_table'].iteritems():
+        for field, value in table_data.iteritems():
+            if field.endswith('index'):
+                index_data = table_data[field]
+                if index_data['name'] == index_name:
+                    attributes = translate_attributes(table_data['attribute'])
+                    if field.startswith('local'):
+                        build_index = _build_secondary_index
+                    else:
+                        build_index = _build_global_index
+
+                    return build_index(index_data, attributes)
 
 
 def get_connection():
@@ -175,18 +217,9 @@ def get_connection():
     )
 
 
-def get_table_columns(table_name):
-    """Return known columns for a table and their data type."""
-    # TODO: see if table.describe() can return what dynamodb knows instead.
-    config = get_config().yaml
-    try:
-        return dict(
-            (column_name, getattr(types, column_type))
-                for column_name, column_type in config['columns'][table_name].items())
-    except KeyError:
-        logger.exception('UnknownTable: %s' % table_name, extra=dict(config=config,
-                                                                     DTM_EVENT='cc_dynamodb.UnknownTable'))
-        raise UnknownTableException('Unknown table: %s' % table_name)
+def list_table_names():
+    """List known table names from configuration, without namespace."""
+    return get_config().hcl['resource']['aws_dynamodb_table'].keys()
 
 
 def get_table(table_name, connection=None):
@@ -205,24 +238,13 @@ def get_table(table_name, connection=None):
     )
 
 
-def list_table_names():
-    """List known table names from configuration, without namespace."""
-    return get_config().yaml['schemas'].keys()
-
-
-def _get_or_default_throughput(throughput):
-    if throughput is False:
-        config = get_config()
-        throughput = config.yaml['default_throughput']
-    return throughput
-
-
 def _get_table_init_data(table_name, connection, throughput):
-    init_data = dict(
-        table_name=get_table_name(table_name),
-        connection=connection or get_connection(),
-        throughput=_get_or_default_throughput(throughput),
-    )
+    init_data = {
+        'table_name': get_table_name(table_name),
+        'connection': connection or get_connection(),
+    }
+    if throughput is not False:
+        init_data['throughput'] = throughput
     init_data.update(_get_table_metadata(table_name))
     return init_data
 
@@ -230,7 +252,9 @@ def _get_table_init_data(table_name, connection, throughput):
 def create_table(table_name, connection=None, throughput=False):
     """Create table. Throws an error if table already exists."""
     try:
-        db_table = table.Table.create(**_get_table_init_data(table_name, connection=connection, throughput=throughput))
+        db_table = table.Table.create(
+            **_get_table_init_data(table_name, connection, throughput)
+        )
         logger.info('cc_dynamodb.create_table: %s' % table_name, extra=dict(status='created table'))
         return db_table
     except JSONResponseError as e:
@@ -264,7 +288,7 @@ def _validate_schema(schema, table_metadata):
         raise UpdateTableException(msg)
 
 
-def update_table(table_name, connection=None, throughput=False):
+def update_table(table_name, connection=None, throughput=None):
     """
     Update existing table.
 
@@ -276,7 +300,9 @@ def update_table(table_name, connection=None, throughput=False):
     :param throughput: a dict, e.g. {'read': 10, 'write': 10}
     :return: the updated boto Table
     """
-    db_table = table.Table(**_get_table_init_data(table_name, connection=connection, throughput=throughput))
+    db_table = table.Table(
+        **_get_table_init_data(table_name, connection, throughput)
+    )
     local_global_indexes_by_name = dict((index.name, index) for index in db_table.global_indexes)
     try:
         table_metadata = db_table.describe()
@@ -289,8 +315,8 @@ def update_table(table_name, connection=None, throughput=False):
     # Update existing primary index throughput
     db_table.update(throughput=throughput)
 
-    upstream_global_indexes_by_name = dict((index['IndexName'], index)
-                                           for index in table_metadata['Table'].get('GlobalSecondaryIndexes', []))
+    upstream_global_indexes_by_name = dict(
+        (index['IndexName'], index) for index in table_metadata['Table'].get('GlobalSecondaryIndexes', []))
     for index_name, index in local_global_indexes_by_name.items():
         if index_name not in upstream_global_indexes_by_name:
             logger.info('Creating GSI %s for %s' % (index_name, table_name))
@@ -310,6 +336,7 @@ def update_table(table_name, connection=None, throughput=False):
                 'write': upstream_global_indexes_by_name[index_name]['ProvisionedThroughput']['WriteCapacityUnits'],
                 'read': upstream_global_indexes_by_name[index_name]['ProvisionedThroughput']['ReadCapacityUnits'],
             }
+
             if throughput == index.throughput:
                 continue
             # Update throughput

@@ -54,11 +54,11 @@ class TableWithQuery2(table.Table):
     def _query_2_with_index(self, *args, **kwargs):
         table_name = cc_dynamodb.get_reverse_table_name(self.table_name)
         index = cc_dynamodb.get_table_index(table_name, kwargs.pop('index'))
-        valid_keys = [key['name'] for key in index['parts'] if key['type'] == 'HashKey']
+        valid_keys = [key.schema()['AttributeName'] for key in index.parts if key.schema()['KeyType'] == 'HASH']
         if len(valid_keys) != 1:
             raise ValueError('Need exactly 1 HashKey for table: %s, index: %s' % (table_name, index))
 
-        range_keys = [key['name'] for key in index['parts'] if key['type'] == 'RangeKey']
+        range_keys = [key.schema()['AttributeName'] for key in index.parts if key.schema()['KeyType'] == 'RANGE']
         valid_keys += range_keys
 
         # reverse is also not supported by moto
