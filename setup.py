@@ -7,11 +7,10 @@ setup(
     install_requires=[
         'bunch>=1.0.1',
         'boto>=2.31.1',
-        'PyYAML==3.10',
         'pyhcl',
     ],
     tests_require=['pytest', 'mock', 'factory_boy'],
-    version='0.5.3',
+    version='1.0.4',
     description='A dynamodb common configuration abstraction',
     author='Paul Craciunoiu',
     author_email='pcraciunoiu@clearcareonline.com',
