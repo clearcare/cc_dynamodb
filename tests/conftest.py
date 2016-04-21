@@ -4,14 +4,14 @@ import os.path
 import pytest
 
 
-AWS_DYNAMODB_CONFIG_PATH = os.path.join(os.path.dirname(__file__), 'dynamo_tables.tf')
+AWS_DYNAMODB_TF_PATH = os.path.join(os.path.dirname(__file__), 'dynamo_tables.tf')
 
 
 @pytest.fixture
 def fake_config():
     import cc_dynamodb
     cc_dynamodb.set_config(
-        terraform_hcl=AWS_DYNAMODB_CONFIG_PATH,
+        dynamodb_tf=AWS_DYNAMODB_TF_PATH,
         aws_access_key_id='<KEY>',
         aws_secret_access_key='<SECRET>',
         namespace='dev_')

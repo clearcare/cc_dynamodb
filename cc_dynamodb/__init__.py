@@ -19,18 +19,18 @@ UPDATE_INDEX_RETRIES = 60
 _cached_config = None
 
 
-def set_config(terraform_hcl, namespace=None, aws_access_key_id=False, aws_secret_access_key=False,
+def set_config(dynamodb_tf, namespace=None, aws_access_key_id=False, aws_secret_access_key=False,
                host=None, port=None, is_secure=None):
     global _cached_config
 
-    with open(terraform_hcl) as hcl_file:
+    with open(dynamodb_tf) as hcl_file:
         terraform_config = hcl.load(hcl_file)
 
     _cached_config = Bunch({
         'hcl': terraform_config,
         'namespace': namespace or os.environ.get('CC_DYNAMODB_NAMESPACE'),
-        'aws_access_key_id': aws_access_key_id or os.environ.get('CC_DYNAMODB_ACCESS_KEY_ID'),
-        'aws_secret_access_key': aws_secret_access_key or os.environ.get('CC_DYNAMODB_SECRET_ACCESS_KEY'),
+        'aws_access_key_id': aws_access_key_id or os.environ.get('CC_DYNAMODB_ACCESS_KEY_ID', False),
+        'aws_secret_access_key': aws_secret_access_key or os.environ.get('CC_DYNAMODB_SECRET_ACCESS_KEY', False),
         'host': host or os.environ.get('CC_DYNAMODB_HOST'),
         'port': port or os.environ.get('CC_DYNAMODB_PORT'),
         'is_secure': is_secure or os.environ.get('CC_DYNAMODB_IS_SECURE'),
