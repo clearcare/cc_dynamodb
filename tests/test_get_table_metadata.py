@@ -85,7 +85,7 @@ def test_get_table_metadata_global_indexes(fake_config):
             'ProjectionType': 'ALL',
         },
         'ProvisionedThroughput': {
-            'WriteCapacityUnits': 15,
-            'ReadCapacityUnits': 15,
+            'WriteCapacityUnits': 5,
+            'ReadCapacityUnits': 5,
         }
     }

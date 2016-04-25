@@ -118,21 +118,12 @@ def _build_index_kwargs(index_details, attributes):
     return kwargs
 
 
-def _build_secondary_index(index_details, attributes):
-    index_type = getattr(fields, translate_projection_key(index_details['projection_type']))
+def _build_index(index_details, attributes, is_global=False):
+    index_type = getattr(
+        fields,
+        translate_projection_key(index_details['projection_type'], is_global=is_global)
+    )
     kwargs = _build_index_kwargs(index_details, attributes)
-    return index_type(index_details['name'], **kwargs)
-
-
-def _build_global_index(index_details, attributes):
-    index_type = getattr(fields, translate_projection_key(index_details['projection_type'], is_global=True))
-
-    kwargs = _build_index_kwargs(index_details, attributes)
-    kwargs['throughput'] = {
-        'read': int(index_details.get('read_capacity', 5)),
-        'write': int(index_details.get('write_capacity', 5)),
-    }
-
     return index_type(index_details['name'], **kwargs)
 
 
@@ -158,14 +149,15 @@ def _get_table_metadata(table_name):
     if global_secondary_index is not None:
         if isinstance(global_secondary_index, list):
             metadata['global_indexes'] = [
-                _build_global_index(i, attributes) for i in global_secondary_index
+                _build_index(i, attributes, is_global=True) for i in global_secondary_index
             ]
         else:
-            metadata['global_indexes'] = _build_global_index(global_secondary_index, attributes),
+            metadata['global_indexes'] = _build_index(
+                global_secondary_index, attributes, is_global=True),
 
     local_secondary_index = table.get('local_secondary_index')
     if local_secondary_index is not None:
-        metadata['indexes'] = _build_secondary_index(local_secondary_index, attributes),
+        metadata['indexes'] = _build_index(local_secondary_index, attributes),
 
     return metadata
 
@@ -189,12 +181,8 @@ def get_table_index(table_name, index_name):
                 index_data = table_data[field]
                 if index_data['name'] == index_name:
                     attributes = translate_attributes(table_data['attribute'])
-                    if field.startswith('local'):
-                        build_index = _build_secondary_index
-                    else:
-                        build_index = _build_global_index
-
-                    return build_index(index_data, attributes)
+                    return _build_index(
+                        index_data, attributes, False if field.startswith('local') else True)
 
 
 def get_connection():
