@@ -17,15 +17,15 @@ UPDATE_INDEX_RETRIES = 60
 
 # Cache to avoid parsing YAML file repeatedly.
 _cached_config = None
-_dynamodb_schema = None
+_dynamodb_table_info = None
 
 
 def set_config(dynamodb_tf, namespace=None, aws_access_key_id=False, aws_secret_access_key=False,
                host=None, port=None, is_secure=None):
     global _cached_config
-    global _dynamodb_schema
+    global _dynamodb_table_info
 
-    _dynamodb_schema = dynamodb_translator(dynamodb_tf, logger)
+    _dynamodb_table_info = dynamodb_translator(dynamodb_tf, logger)
 
     _cached_config = Bunch({
         'namespace': namespace or os.environ.get('CC_DYNAMODB_NAMESPACE'),
@@ -85,9 +85,9 @@ def get_reverse_table_name(table_name):
 
 
 def get_table_index(table_name, index_name):
-    if _dynamodb_schema is None:
+    if _dynamodb_table_info is None:
         raise ConfigurationError('set_config must be called')
-    return _dynamodb_schema.get_table_index(table_name, index_name)
+    return _dynamodb_table_info.get_table_index(table_name, index_name)
 
 
 def get_connection():
@@ -112,9 +112,9 @@ def get_connection():
 
 def list_table_names():
     """List known table names from configuration, without namespace."""
-    if _dynamodb_schema is None:
+    if _dynamodb_table_info is None:
         raise ConfigurationError('set_config must be called')
-    return _dynamodb_schema.list_table_names()
+    return _dynamodb_table_info.list_table_names()
 
 
 def get_table(table_name, connection=None):
@@ -126,17 +126,17 @@ def get_table(table_name, connection=None):
     This function avoids additional lookups when using a table.
     The columns included are only the optional columns you may find in some of the items.
     '''
-    if _dynamodb_schema is None:
+    if _dynamodb_table_info is None:
         raise ConfigurationError('set_config must be called')
     return table.Table(
         get_table_name(table_name),
         connection=connection or get_connection(),
-        **_dynamodb_schema.get_schema(table_name)
+        **_dynamodb_table_info.get_schema(table_name)
     )
 
 
 def _get_table_init_data(table_name, connection, throughput):
-    if _dynamodb_schema is None:
+    if _dynamodb_table_info is None:
         raise ConfigurationError('set_config must be called')
     init_data = {
         'table_name': get_table_name(table_name),
@@ -144,7 +144,7 @@ def _get_table_init_data(table_name, connection, throughput):
     }
     if throughput is not False:
         init_data['throughput'] = throughput
-    init_data.update(_dynamodb_schema.get_schema(table_name))
+    init_data.update(_dynamodb_table_info.get_schema(table_name))
     return init_data
 
 
