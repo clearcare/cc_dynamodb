@@ -1,13 +1,13 @@
 import copy
 import os
 import time
-import hcl
 
 from boto import dynamodb2
-from boto.dynamodb2 import fields  # AllIndex, GlobalAllIndex, HashKey, RangeKey
 from boto.dynamodb2 import table
 from boto.exception import JSONResponseError
 from bunch import Bunch
+from hcl_translator import dynamodb_translator
+from hcl_translator.exceptions import UnknownTableException
 
 from .log import create_logger
 
@@ -17,17 +17,17 @@ UPDATE_INDEX_RETRIES = 60
 
 # Cache to avoid parsing YAML file repeatedly.
 _cached_config = None
+_dynamodb_schema = None
 
 
 def set_config(dynamodb_tf, namespace=None, aws_access_key_id=False, aws_secret_access_key=False,
                host=None, port=None, is_secure=None):
     global _cached_config
+    global _dynamodb_schema
 
-    with open(dynamodb_tf) as hcl_file:
-        terraform_config = hcl.load(hcl_file)
+    _dynamodb_schema = dynamodb_translator(dynamodb_tf, logger)
 
     _cached_config = Bunch({
-        'hcl': terraform_config,
         'namespace': namespace or os.environ.get('CC_DYNAMODB_NAMESPACE'),
         'aws_access_key_id': aws_access_key_id or os.environ.get('CC_DYNAMODB_ACCESS_KEY_ID', False),
         'aws_secret_access_key': aws_secret_access_key or os.environ.get('CC_DYNAMODB_SECRET_ACCESS_KEY', False),
@@ -73,95 +73,6 @@ class ConfigurationError(Exception):
     pass
 
 
-def translate_projection_key(projection_key, is_global=False):
-    return '{}{}Index'.format('Global' if is_global else '', projection_key.title())
-
-
-def translate_field_type(field_type):
-    return ''.join(c.title() for c in field_type.split('_'))
-
-
-def translate_attributes(attributes):
-    return {attribute['name']: attribute['type'] for attribute in attributes}
-
-
-def _build_attribute(field_name, field_type, attributes):
-    key_type = getattr(fields, translate_field_type(field_type))
-    return key_type(field_name, **{'data_type': attributes[field_name]})
-
-
-def _build_schema(key_config, attributes):
-    hash_key = key_config['hash_key']
-    schema = [
-        _build_attribute(hash_key, 'hash_key', attributes)
-    ]
-
-    range_key = key_config.get('range_key')
-    if range_key:
-        schema.append(_build_attribute(range_key, 'range_key', attributes))
-    return schema
-
-
-def _build_index_kwargs(index_details, attributes):
-    hash_key = index_details['hash_key']
-
-    kwargs = {
-        'parts': [
-            _build_attribute(hash_key, 'hash_key', attributes),
-        ],
-    }
-
-    range_key = index_details.get('range_key')
-    if range_key:
-        kwargs['parts'].append(_build_attribute(range_key, 'range_key', attributes))
-
-    return kwargs
-
-
-def _build_index(index_details, attributes, is_global=False):
-    index_type = getattr(
-        fields,
-        translate_projection_key(index_details['projection_type'], is_global=is_global)
-    )
-    kwargs = _build_index_kwargs(index_details, attributes)
-    return index_type(index_details['name'], **kwargs)
-
-
-def _get_table_metadata(table_name):
-
-    try:
-        table = get_config().hcl['resource']['aws_dynamodb_table'][table_name]
-    except KeyError:
-        logger.exception('cc_dynamodb.UnknownTable', extra=dict(
-            table_name=table_name,
-            table=table_name,
-            DTM_EVENT='cc_dynamodb.UnknownTable'),
-        )
-        raise UnknownTableException('Unknown table: %s' % table_name)
-
-    attributes = translate_attributes(table['attribute'])
-
-    metadata = {
-        'schema': _build_schema(table, attributes),
-    }
-
-    global_secondary_index = table.get('global_secondary_index')
-    if global_secondary_index is not None:
-        if isinstance(global_secondary_index, list):
-            metadata['global_indexes'] = [
-                _build_index(i, attributes, is_global=True) for i in global_secondary_index
-            ]
-        else:
-            metadata['global_indexes'] = _build_index(
-                global_secondary_index, attributes, is_global=True),
-
-    local_secondary_index = table.get('local_secondary_index')
-    if local_secondary_index is not None:
-        metadata['indexes'] = _build_index(local_secondary_index, attributes),
-
-    return metadata
-
-
 def get_table_name(table_name):
     '''Prefixes the table name for the different environments/settings.'''
     return get_config().namespace + table_name
@@ -174,15 +85,9 @@ def get_reverse_table_name(table_name):
 
 
 def get_table_index(table_name, index_name):
-
-    for table_name, table_data in get_config().hcl['resource']['aws_dynamodb_table'].iteritems():
-        for field, value in table_data.iteritems():
-            if field.endswith('index'):
-                index_data = table_data[field]
-                if index_data['name'] == index_name:
-                    attributes = translate_attributes(table_data['attribute'])
-                    return _build_index(
-                        index_data, attributes, False if field.startswith('local') else True)
+    if _dynamodb_schema is None:
+        raise ConfigurationError('set_config must be called')
+    return _dynamodb_schema.get_table_index(table_name, index_name)
 
 
 def get_connection():
@@ -207,7 +112,9 @@ def get_connection():
 
 def list_table_names():
     """List known table names from configuration, without namespace."""
-    return get_config().hcl['resource']['aws_dynamodb_table'].keys()
+    if _dynamodb_schema is None:
+        raise ConfigurationError('set_config must be called')
+    return _dynamodb_schema.list_table_names()
 
 
 def get_table(table_name, connection=None):
@@ -219,21 +126,25 @@ def get_table(table_name, connection=None):
     This function avoids additional lookups when using a table.
     The columns included are only the optional columns you may find in some of the items.
     '''
+    if _dynamodb_schema is None:
+        raise ConfigurationError('set_config must be called')
     return table.Table(
         get_table_name(table_name),
         connection=connection or get_connection(),
-        **_get_table_metadata(table_name)
+        **_dynamodb_schema.get_schema(table_name)
     )
 
 
 def _get_table_init_data(table_name, connection, throughput):
+    if _dynamodb_schema is None:
+        raise ConfigurationError('set_config must be called')
     init_data = {
         'table_name': get_table_name(table_name),
         'connection': connection or get_connection(),
     }
     if throughput is not False:
         init_data['throughput'] = throughput
-    init_data.update(_get_table_metadata(table_name))
+    init_data.update(_dynamodb_schema.get_schema(table_name))
     return init_data
 
 
@@ -351,10 +262,6 @@ def update_table(table_name, connection=None, throughput=None):
 
     logger.info('cc_dynamodb.update_table: %s' % table_name, extra=dict(status='updated table'))
     return db_table
-
-
-class UnknownTableException(Exception):
-    pass
 
 
 class TableAlreadyExistsException(Exception):
