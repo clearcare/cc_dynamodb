@@ -131,7 +131,7 @@ def get_table(table_name, connection=None):
     return table.Table(
         get_table_name(table_name),
         connection=connection or get_connection(),
-        **_dynamodb_table_info.get_schema(table_name)
+        **_dynamodb_table_info.get_table(table_name)
     )
 
 
@@ -144,7 +144,7 @@ def _get_table_init_data(table_name, connection, throughput):
     }
     if throughput is not False:
         init_data['throughput'] = throughput
-    init_data.update(_dynamodb_table_info.get_schema(table_name))
+    init_data.update(_dynamodb_table_info.get_table(table_name))
     return init_data
 
 
