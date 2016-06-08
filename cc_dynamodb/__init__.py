@@ -131,8 +131,13 @@ def get_table(table_name, connection=None):
     return table.Table(
         get_table_name(table_name),
         connection=connection or get_connection(),
-        **_dynamodb_table_info.get_schema(table_name)
+        **_dynamodb_table_info.get_table(table_name)
     )
+
+
+def list_tables(connection=None):
+    dynamodb = connection or get_connection()
+    return dynamodb.list_tables()
 
 
 def _get_table_init_data(table_name, connection, throughput):
