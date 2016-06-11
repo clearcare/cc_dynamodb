@@ -1,7 +1,7 @@
 from decimal import Decimal
 import operator
 
-from boto.dynamodb2 import table
+from boto.dynamodb2 import table as dynamodb2_table
 from boto.dynamodb2.types import QUERY_OPERATORS
 from mock import patch
 import moto.core.models
@@ -33,7 +33,7 @@ def mock_table_with_data(table_name, data):
     return table
 
 
-class TableWithQuery2(table.Table):
+class TableWithQuery2(dynamodb2_table.Table):
     @staticmethod
     def _sorting_function(range_keys):
         def sorter(obj):
@@ -141,3 +141,14 @@ def mock_query_2(func=None):
         return MockQuery2()(func)
     else:
         return MockQuery2()
+
+
+def create_table(table_name):
+    """Create table. Throws an error if table already exists."""
+    config = cc_dynamodb.get_config()
+    args, kwargs = cc_dynamodb._dynamodb_translator.create_table_args(table_name, config.namespace)
+    table = cc_dynamodb.get_connection().create_table(*args, **kwargs)
+    # moto sometimes return a dict
+    if isinstance(table, dict):
+        table = dynamodb2_table.Table(table['Table']['TableName'])
+    return table

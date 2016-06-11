@@ -11,7 +11,7 @@ setup(
         'pyhcl',
     ],
     tests_require=['pytest', 'mock', 'factory_boy'],
-    version='1.0.0',
+    version='1.0.1',
     description='A dynamodb common configuration abstraction',
     author='Paul Craciunoiu',
     author_email='pcraciunoiu@clearcareonline.com',
