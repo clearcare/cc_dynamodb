@@ -7,7 +7,6 @@ setup(
     install_requires=[
         'bunch>=1.0.1',
         'boto>=2.31.1',
-        'PyYAML==3.10',
         'pyhcl',
     ],
     tests_require=['pytest', 'mock', 'factory_boy'],
