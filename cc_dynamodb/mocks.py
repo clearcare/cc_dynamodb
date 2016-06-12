@@ -12,6 +12,7 @@ import cc_dynamodb
 __all__ = [
     'mock_query_2',
     'mock_table_with_data',
+    'create_table',
 ]
 
 
