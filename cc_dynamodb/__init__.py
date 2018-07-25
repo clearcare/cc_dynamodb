@@ -169,7 +169,7 @@ def get_connection():
             is_secure=config.is_secure or False)        # For DynamoDB Local, disable secure connections
 
     return dynamodb2.connect_to_region(
-        'us-west-2',
+        os.environ.get('CC_AWS_REGION', 'us-west-2'),
         aws_access_key_id=config.aws_access_key_id,
         aws_secret_access_key=config.aws_secret_access_key,
     )
